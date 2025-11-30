@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Snooker Pro</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0a0a12;
+        }
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        
+        /* Main HUD Container */
+        #hud {
+            position: fixed;
+            top: 0;
+            left: 0;
+            padding: 15px;
+            pointer-events: none;
+            z-index: 100;
+        }
+        
+        .hud-panel {
+            background: linear-gradient(135deg, rgba(20, 15, 25, 0.92) 0%, rgba(35, 25, 35, 0.88) 100%);
+            border: 1px solid rgba(255, 200, 120, 0.15);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: #e8e0d5;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+            margin-bottom: 10px;
+        }
+        
+        .hud-panel h3 {
+            color: #ffc878;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .hud-panel p {
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        
+        /* Score Panel */
+        #score-panel {
+            min-width: 180px;
+        }
+        
+        .score-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 4px 0;
+        }
+        
+        .score-label {
+            color: #a09080;
+            font-size: 12px;
+        }
+        
+        .score-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #ffd699;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .score-value.player-active {
+            color: #7fff7f;
+            text-shadow: 0 0 10px rgba(127, 255, 127, 0.5);
+        }
+        
+        #game-status {
+            font-size: 11px;
+            color: #c0b0a0;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid rgba(255, 200, 120, 0.1);
+        }
+        
+        /* Physics Panel */
+        #physics-panel {
+            position: fixed;
+            top: 15px;
+            right: 15px;
+            width: 280px;
+            background: linear-gradient(135deg, rgba(20, 15, 25, 0.95) 0%, rgba(35, 25, 35, 0.92) 100%);
+            border: 1px solid rgba(255, 200, 120, 0.15);
+            border-radius: 8px;
+            padding: 12px 16px;
+            color: #e8e0d5;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            z-index: 100;
+            font-size: 11px;
+        }
+        
+        #physics-panel h3 {
+            color: #ffc878;
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .physics-section {
+            margin-bottom: 12px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid rgba(255, 200, 120, 0.08);
+        }
+        
+        .physics-section:last-child {
+            margin-bottom: 0;
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+        
+        .physics-section-title {
+            color: #a09080;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+        }
+        
+        .physics-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 2px 0;
+        }
+        
+        .physics-label {
+            color: #908070;
+            font-size: 10px;
+        }
+        
+        .physics-value {
+            color: #e0d8c8;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+        }
+        
+        .physics-value.highlight {
+            color: #7fff7f;
+        }
+        
+        .physics-value.warning {
+            color: #ffaa55;
+        }
+        
+        /* Collision Log */
+        #collision-log {
+            max-height: 200px;
+            overflow-y: auto;
+            font-size: 8px;
+            color: #807060;
+            margin-top: 6px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        #collision-log::-webkit-scrollbar {
+            width: 4px;
+        }
+        
+        #collision-log::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 2px;
+        }
+        
+        #collision-log::-webkit-scrollbar-thumb {
+            background: rgba(255, 200, 120, 0.3);
+            border-radius: 2px;
+        }
+        
+        .log-entry {
+            padding: 2px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            word-break: break-all;
+        }
+        
+        .log-entry.collision {
+            color: #ffaa55;
+        }
+        
+        .log-entry.pocket {
+            color: #55ff55;
+        }
+        
+        .log-entry.cushion {
+            color: #55aaff;
+        }
+        
+        .log-entry.shot {
+            color: #ff55ff;
+            font-weight: bold;
+        }
+        
+        #copy-log-btn {
+            background: rgba(255, 200, 120, 0.2);
+            border: 1px solid rgba(255, 200, 120, 0.3);
+            color: #ffc878;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 9px;
+            margin-top: 8px;
+            width: 100%;
+            pointer-events: auto;
+        }
+        
+        #copy-log-btn:hover {
+            background: rgba(255, 200, 120, 0.3);
+        }
+        
+        /* Power Bar */
+        #power-container {
+            position: fixed;
+            bottom: 25px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            text-align: center;
+        }
+        
+        #power-label {
+            color: #a09080;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 6px;
+        }
+        
+        #power-bar-container {
+            width: 320px;
+            height: 12px;
+            background: linear-gradient(180deg, rgba(0, 0, 0, 0.6) 0%, rgba(20, 15, 20, 0.8) 100%);
+            border: 1px solid rgba(255, 200, 120, 0.2);
+            border-radius: 6px;
+            overflow: hidden;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        
+        #power-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, 
+                #2a6030 0%, 
+                #4a9040 25%, 
+                #7ab040 50%, 
+                #c0a030 75%, 
+                #e07030 100%);
+            border-radius: 4px;
+            transition: width 0.05s ease-out;
+            box-shadow: 0 0 10px rgba(200, 150, 50, 0.3);
+        }
+        
+        #power-percent {
+            color: #ffd699;
+            font-size: 11px;
+            font-family: 'Courier New', monospace;
+            margin-top: 4px;
+        }
+        
+        /* Instructions */
+        #instructions {
+            position: fixed;
+            bottom: 75px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(200, 180, 160, 0.5);
+            font-size: 10px;
+            text-align: center;
+            z-index: 100;
+            letter-spacing: 0.5px;
+        }
+        
+        /* Pocketed Balls */
+        #pocketed-container {
+            position: fixed;
+            bottom: 110px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 100;
+            text-align: center;
+        }
+        
+        #pocketed-label {
+            color: #605040;
+            font-size: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 5px;
+        }
+        
+        #pocketed-balls {
+            display: flex;
+            gap: 6px;
+            justify-content: center;
+        }
+        
+        .pocketed-ball {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 200, 120, 0.2);
+            box-shadow: inset 0 -2px 4px rgba(0, 0, 0, 0.3), 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        /* Spin Control */
+        #spin-control {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 100;
+            pointer-events: auto;
+        }
+        
+        #spin-control-label {
+            color: #a09080;
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 6px;
+            text-align: center;
+        }
+        
+        #spin-ball {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #ffffff 0%, #e0e0e0 40%, #b0b0b0 100%);
+            border: 2px solid rgba(255, 200, 120, 0.3);
+            position: relative;
+            cursor: crosshair;
+            box-shadow: 
+                inset 0 -8px 15px rgba(0, 0, 0, 0.3),
+                0 4px 15px rgba(0, 0, 0, 0.5);
+        }
+        
+        #spin-marker {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #ff6666 0%, #cc0000 100%);
+            border: 2px solid #ffffff;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.4);
+            transition: top 0.1s ease-out, left 0.1s ease-out;
+        }
+        
+        #spin-crosshair-h, #spin-crosshair-v {
+            position: absolute;
+            background: rgba(255, 200, 120, 0.3);
+            pointer-events: none;
+        }
+        
+        #spin-crosshair-h {
+            width: 100%;
+            height: 1px;
+            top: 50%;
+            left: 0;
+        }
+        
+        #spin-crosshair-v {
+            width: 1px;
+            height: 100%;
+            top: 0;
+            left: 50%;
+        }
+        
+        #spin-info {
+            color: #a09080;
+            font-size: 9px;
+            text-align: center;
+            margin-top: 6px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        #spin-reset {
+            display: block;
+            margin: 6px auto 0;
+            background: rgba(255, 200, 120, 0.2);
+            border: 1px solid rgba(255, 200, 120, 0.3);
+            color: #ffc878;
+            padding: 3px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 9px;
+        }
+        
+        #spin-reset:hover {
+            background: rgba(255, 200, 120, 0.3);
+        }
+        
+        /* Message */
+        #message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(135deg, rgba(20, 15, 25, 0.95) 0%, rgba(40, 30, 40, 0.95) 100%);
+            border: 2px solid rgba(255, 200, 120, 0.4);
+            border-radius: 12px;
+            padding: 25px 40px;
+            color: #ffd699;
+            font-size: 20px;
+            text-align: center;
+            z-index: 200;
+            display: none;
+            backdrop-filter: blur(20px);
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+        }
+        
+        /* Loading Screen */
+        #loading {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(ellipse at center, #1a1520 0%, #0a0a12 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        #loading h1 {
+            color: #ffc878;
+            font-size: 42px;
+            margin-bottom: 30px;
+            font-weight: 300;
+            letter-spacing: 4px;
+        }
+        
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 2px solid rgba(255, 200, 120, 0.15);
+            border-top-color: #ffc878;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        #loading p {
+            color: #605040;
+            margin-top: 20px;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        
+        #loading-progress-container {
+            width: 300px;
+            height: 6px;
+            background: rgba(255, 200, 120, 0.1);
+            border-radius: 3px;
+            margin-top: 20px;
+            overflow: hidden;
+        }
+        
+        #loading-progress {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #ffc878, #ffaa55);
+            border-radius: 3px;
+            transition: width 0.1s ease-out;
+        }
+        
+        #loading-percent {
+            color: #ffc878;
+            font-size: 14px;
+            margin-top: 10px;
+            font-family: 'Courier New', monospace;
+        }
+        
+        /* Target Ball Indicator */
+        #target-indicator {
+            position: fixed;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, rgba(20, 15, 25, 0.92) 0%, rgba(35, 25, 35, 0.88) 100%);
+            border: 1px solid rgba(255, 200, 120, 0.2);
+            border-radius: 20px;
+            padding: 8px 20px;
+            color: #e8e0d5;
+            font-size: 12px;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            backdrop-filter: blur(20px);
+        }
+        
+        #target-ball-preview {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <h1>🎱 SNOOKER</h1>
+        <div class="loading-spinner"></div>
+        <p id="loading-status">Initializing physics engine...</p>
+        <div id="loading-progress-container">
+            <div id="loading-progress"></div>
+        </div>
+        <div id="loading-percent">0%</div>
+    </div>
+
+    <div id="game-container"></div>
+
+    <!-- Target Indicator -->
+    <div id="target-indicator">
+        <div id="target-ball-preview" style="background: #cc0000;"></div>
+        <span id="target-text">Pot a Red</span>
+    </div>
+
+    <!-- Left HUD - Score -->
+    <div id="hud">
+        <div class="hud-panel" id="score-panel">
+            <h3>🏆 Score</h3>
+            <div class="score-row">
+                <span class="score-label">Player 1</span>
+                <span class="score-value player-active" id="p1-score">0</span>
+            </div>
+            <div class="score-row">
+                <span class="score-label">Player 2</span>
+                <span class="score-value" id="p2-score">0</span>
+            </div>
+            <div class="score-row" style="margin-top: 8px;">
+                <span class="score-label">Reds Left</span>
+                <span class="score-value" id="reds-remaining" style="font-size: 14px;">15</span>
+            </div>
+            <div id="game-status">Player 1's turn</div>
+        </div>
+    </div>
+
+    <!-- Right HUD - Physics -->
+    <div id="physics-panel">
+        <h3><span style="font-size: 14px;">⚪</span> Cue Ball Physics</h3>
+        
+        <div class="physics-section">
+            <div class="physics-section-title">Motion</div>
+            <div class="physics-row">
+                <span class="physics-label">Speed</span>
+                <span class="physics-value" id="ball-velocity">0.00 m/s</span>
+            </div>
+            <div class="physics-row">
+                <span class="physics-label">Angular</span>
+                <span class="physics-value" id="ball-angular">0.00 rad/s</span>
+            </div>
+            <div class="physics-row">
+                <span class="physics-label">Spin</span>
+                <span class="physics-value" id="ball-spin">None</span>
+            </div>
+        </div>
+        
+        <div class="physics-section">
+            <div class="physics-section-title">Position</div>
+            <div class="physics-row">
+                <span class="physics-label">X</span>
+                <span class="physics-value" id="ball-pos-x">0.000</span>
+            </div>
+            <div class="physics-row">
+                <span class="physics-label">Z</span>
+                <span class="physics-value" id="ball-pos-z">0.000</span>
+            </div>
+        </div>
+        
+        <div class="physics-section">
+            <div class="physics-section-title">Energy</div>
+            <div class="physics-row">
+                <span class="physics-label">Kinetic</span>
+                <span class="physics-value" id="ball-energy">0.000 J</span>
+            </div>
+            <div class="physics-row">
+                <span class="physics-label">Momentum</span>
+                <span class="physics-value" id="ball-momentum">0.000</span>
+            </div>
+        </div>
+        
+        <div class="physics-section">
+            <div class="physics-section-title">Last Shot</div>
+            <div class="physics-row">
+                <span class="physics-label">Power</span>
+                <span class="physics-value" id="last-power">-</span>
+            </div>
+            <div class="physics-row">
+                <span class="physics-label">Max Speed</span>
+                <span class="physics-value" id="last-max-speed">-</span>
+            </div>
+        </div>
+        
+        <div class="physics-section">
+            <div class="physics-section-title">Collision Log</div>
+            <div id="collision-log"></div>
+            <button id="copy-log-btn" onclick="window.game?.copyCollisionLog()">📋 Copy Physics Log</button>
+        </div>
+    </div>
+
+    <!-- Bottom Controls -->
+    <div id="instructions">
+        LMB: Aim at target · RMB: Charge power · Release: Shoot · WASD: Move camera · Scroll: Zoom · R: Reset
+    </div>
+
+    <!-- Spin Control -->
+    <div id="spin-control">
+        <div id="spin-control-label">Cue Ball Spin</div>
+        <div id="spin-ball">
+            <div id="spin-crosshair-h"></div>
+            <div id="spin-crosshair-v"></div>
+            <div id="spin-marker"></div>
+        </div>
+        <div id="spin-info">Center (no spin)</div>
+        <button id="spin-reset">Reset</button>
+    </div>
+
+    <div id="pocketed-container">
+        <div id="pocketed-label">Pocketed</div>
+        <div id="pocketed-balls"></div>
+    </div>
+
+    <div id="power-container">
+        <div id="power-label">Shot Power</div>
+        <div id="power-bar-container">
+            <div id="power-bar"></div>
+        </div>
+        <div id="power-percent">0%</div>
+    </div>
+
+    <div id="message"></div>
+
+    <script type="module" src="/src/main.js"></script>
+</body>
+</html>

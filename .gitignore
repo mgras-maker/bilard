@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+# Large model files (stored locally only)
+models/tables/*.glb
