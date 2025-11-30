@@ -416,9 +416,9 @@ class BilliardGame {
             0.1,
             200
         );
-        // Widok z góry na cały stół - kamera wysoko i prosto nad stołem
-        // Lekkie przesunięcie w Z dla lepszej perspektywy całego stołu
-        this.camera.position.set(TABLE_CENTER_X, TABLE_SURFACE_Y + 5.5, TABLE_CENTER_Z + 0.3);
+        // Widok z góry na cały stół - kamera PROSTO nad stołem (polar angle = 0)
+        // Wysokość dobrana tak, żeby cały stół był widoczny
+        this.camera.position.set(TABLE_CENTER_X, TABLE_SURFACE_Y + 4.5, TABLE_CENTER_Z + 0.01);
         this.camera.lookAt(TABLE_CENTER_X, TABLE_SURFACE_Y, TABLE_CENTER_Z);
     }
 
