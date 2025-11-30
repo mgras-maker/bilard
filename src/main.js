@@ -12,6 +12,7 @@ import {
     applyShot,
     getBallDiagnostics
 } from './physics.js';
+import { createTournamentTable, TOURNAMENT_TABLE } from './TournamentTable.js';
 
 // Loading progress helper
 function updateLoadingProgress(percent, status) {
@@ -133,7 +134,7 @@ class BilliardGame {
         this.cueStick = null;
         this.isAiming = false;
         this.shotPower = 0;
-        this.maxPower = 15;
+        this.maxPower = 12; // Reduced for more realistic feel
         this.score = 0;
         this.shots = 0;
         this.canShoot = true;
@@ -178,6 +179,11 @@ class BilliardGame {
         this.spinX = 0; // Left/right english (-1 = left, 1 = right)
         this.spinY = 0; // Top/back spin (-1 = backspin, 1 = topspin)
 
+        // Shot hardness control - 0 = soft, 0.5 = normal, 1 = hard
+        // Soft = longer cue contact = better spin transfer
+        // Hard = shorter contact = more power, less spin
+        this.shotHardness = 0.5;
+
         // Enhanced physics logging
         this.physicsLog = []; // Detailed physics events
         this.trajectoryLog = []; // Ball trajectories per shot
@@ -186,7 +192,20 @@ class BilliardGame {
         this.isTrackingShot = false;
         this.shotStartTimestamp = 0;
 
+        // Scene management
+        this.currentScene = 'tournament'; // 'classic' or 'tournament' - tournament is default
+        this.tableData = null; // Store current table data
+        this.tournamentTableData = null; // Store tournament table reference
+        this.classicTableLoaded = false; // Track if classic table GLB was loaded
+
         this.init();
+    }
+
+    /**
+     * Get current table surface Y based on active scene
+     */
+    getSurfaceY() {
+        return this.currentScene === 'tournament' ? TOURNAMENT_TABLE.HEIGHT : TABLE_SURFACE_Y;
     }
 
     async init() {
@@ -211,9 +230,9 @@ class BilliardGame {
         this.setupCamera();
         this.setupControls();
 
-        // Create game objects (table loading is async with progress)
-        updateLoadingProgress(20, 'Loading table model...');
-        await this.createTable();
+        // Create game objects - tournament table is default (faster, no GLB loading)
+        updateLoadingProgress(20, 'Creating tournament table...');
+        this.createTournamentScene();
 
         updateLoadingProgress(95, 'Creating balls...');
         this.createBalls();
@@ -369,16 +388,16 @@ class BilliardGame {
     }
 
     setupLights() {
-        // Intimate club ambient - very subtle
-        const ambient = new THREE.AmbientLight(0x2a2025, 0.3);
+        // Brighter club ambient for better visibility
+        const ambient = new THREE.AmbientLight(0x4a4045, 0.6);
         this.scene.add(ambient);
 
-        // Hemisphere light - dark ceiling, warm floor reflection
-        const hemiLight = new THREE.HemisphereLight(0x1a1520, 0x3d2a25, 0.2);
+        // Hemisphere light - brighter for better pocket visibility
+        const hemiLight = new THREE.HemisphereLight(0x3a3035, 0x5d4a45, 0.5);
         this.scene.add(hemiLight);
 
-        // Main table lamp - warm, focused pool of light
-        const mainLight = new THREE.SpotLight(0xffeedd, 2.5, 8, Math.PI / 4, 0.5, 1.5);
+        // Main table lamp - warm, focused pool of light (brighter)
+        const mainLight = new THREE.SpotLight(0xffeedd, 3.5, 10, Math.PI / 3, 0.4, 1.2);
         mainLight.position.set(TABLE_CENTER_X, TABLE_SURFACE_Y + 2.5, TABLE_CENTER_Z);
         mainLight.target.position.set(TABLE_CENTER_X, TABLE_SURFACE_Y, TABLE_CENTER_Z);
         mainLight.castShadow = true;
@@ -390,21 +409,32 @@ class BilliardGame {
         this.scene.add(mainLight);
         this.scene.add(mainLight.target);
 
-        // Secondary table lights - softer fill
-        const fillLight1 = new THREE.SpotLight(0xffe8cc, 0.8, 6, Math.PI / 3, 0.6, 1.5);
-        fillLight1.position.set(TABLE_CENTER_X - 1, TABLE_SURFACE_Y + 2, TABLE_CENTER_Z - 1);
+        // Secondary table lights - brighter fill for pocket visibility
+        const fillLight1 = new THREE.SpotLight(0xffe8cc, 1.5, 8, Math.PI / 3, 0.5, 1.2);
+        fillLight1.position.set(TABLE_CENTER_X - 1.5, TABLE_SURFACE_Y + 2.5, TABLE_CENTER_Z - 1.5);
         fillLight1.target.position.set(TABLE_CENTER_X, TABLE_SURFACE_Y, TABLE_CENTER_Z);
+        fillLight1.castShadow = true;
         this.scene.add(fillLight1);
         this.scene.add(fillLight1.target);
 
-        const fillLight2 = new THREE.SpotLight(0xffe8cc, 0.8, 6, Math.PI / 3, 0.6, 1.5);
-        fillLight2.position.set(TABLE_CENTER_X + 1, TABLE_SURFACE_Y + 2, TABLE_CENTER_Z + 1);
+        const fillLight2 = new THREE.SpotLight(0xffe8cc, 1.5, 8, Math.PI / 3, 0.5, 1.2);
+        fillLight2.position.set(TABLE_CENTER_X + 1.5, TABLE_SURFACE_Y + 2.5, TABLE_CENTER_Z + 1.5);
         fillLight2.target.position.set(TABLE_CENTER_X, TABLE_SURFACE_Y, TABLE_CENTER_Z);
+        fillLight2.castShadow = true;
         this.scene.add(fillLight2);
         this.scene.add(fillLight2.target);
 
-        // Subtle rim light for ball definition
-        const rimLight = new THREE.DirectionalLight(0xffd4aa, 0.3);
+        // Additional corner lights for pocket illumination
+        const cornerLight1 = new THREE.PointLight(0xffeedd, 0.8, 5);
+        cornerLight1.position.set(TABLE_CENTER_X + 1, TABLE_SURFACE_Y + 1.5, TABLE_CENTER_Z + 2);
+        this.scene.add(cornerLight1);
+
+        const cornerLight2 = new THREE.PointLight(0xffeedd, 0.8, 5);
+        cornerLight2.position.set(TABLE_CENTER_X - 1, TABLE_SURFACE_Y + 1.5, TABLE_CENTER_Z - 2);
+        this.scene.add(cornerLight2);
+
+        // Rim light for ball definition - stronger
+        const rimLight = new THREE.DirectionalLight(0xffd4aa, 0.6);
         rimLight.position.set(3, 2, -3);
         this.scene.add(rimLight);
     }
@@ -416,10 +446,12 @@ class BilliardGame {
             0.1,
             200
         );
-        // Widok z góry na cały stół - kamera PROSTO nad stołem (polar angle = 0)
-        // Wysokość dobrana tak, żeby cały stół był widoczny
-        this.camera.position.set(TABLE_CENTER_X, TABLE_SURFACE_Y + 4.5, TABLE_CENTER_Z + 0.01);
-        this.camera.lookAt(TABLE_CENTER_X, TABLE_SURFACE_Y, TABLE_CENTER_Z);
+        // Widok z boku stołu - stół w poziomie (długość widoczna)
+        // Kamera ustawiona z boku, lekko z góry dla lepszej perspektywy
+        const surfaceY = TOURNAMENT_TABLE.HEIGHT;
+        // Pozycja z boku stołu (oś X), trochę w górę (Y), na środku długości (Z)
+        this.camera.position.set(TABLE_CENTER_X, surfaceY + 2.5, TABLE_CENTER_Z + 4.0);
+        this.camera.lookAt(TABLE_CENTER_X, surfaceY, TABLE_CENTER_Z);
     }
 
     setupControls() {
@@ -433,7 +465,9 @@ class BilliardGame {
         this.controls.maxPolarAngle = Math.PI; // Pełny zakres pionowy
         this.controls.minAzimuthAngle = -Infinity; // Bez ograniczeń poziomych
         this.controls.maxAzimuthAngle = Infinity;
-        this.controls.target.set(TABLE_CENTER_X, TABLE_SURFACE_Y, TABLE_CENTER_Z);
+        // Use tournament table height as default
+        const surfaceY = TOURNAMENT_TABLE.HEIGHT;
+        this.controls.target.set(TABLE_CENTER_X, surfaceY, TABLE_CENTER_Z);
         this.controls.mouseButtons = {
             LEFT: null,
             MIDDLE: THREE.MOUSE.PAN,
@@ -605,6 +639,7 @@ class BilliardGame {
         const tableBodyDesc = RAPIER.RigidBodyDesc.fixed()
             .setTranslation(TABLE_CENTER_X, TABLE_SURFACE_Y, TABLE_CENTER_Z);
         const tableBody = this.world.createRigidBody(tableBodyDesc);
+        this.tablePhysicsBody = tableBody; // Store reference for cleanup
         const tableColliderDesc = RAPIER.ColliderDesc.cuboid(
             TABLE_WIDTH / 2,
             0.01,
@@ -709,8 +744,8 @@ class BilliardGame {
             .setFriction(cushionFriction);
         this.world.createCollider(backCushion, tableBody);
 
-        // DEBUG: Visualize cushion boundaries with lines
-        this.createCushionDebugLines();
+        // DEBUG: Visualize cushion boundaries with lines (disabled)
+        // this.createCushionDebugLines();
 
         // Store pocket positions for ball detection
         // Corner pockets are larger and positioned at actual corners
@@ -740,8 +775,8 @@ class BilliardGame {
             { x: TABLE_CENTER_X + halfWidth + middlePocketOutset, z: TABLE_CENTER_Z, radius: middlePocketRadius },
         ];
 
-        // DEBUG: Visualize pockets
-        this.createPocketDebugCircles();
+        // DEBUG: Visualize pockets (disabled)
+        // this.createPocketDebugCircles();
 
         // Pozycje koszyków na bile (pod stołem, przy każdej kieszeni)
         const basketY = TABLE_SURFACE_Y - 0.12;
@@ -759,7 +794,7 @@ class BilliardGame {
     }
 
     createPocketDebugCircles() {
-        const y = TABLE_SURFACE_Y + 0.015;
+        const y = this.getSurfaceY() + 0.015;
         const segments = 32;
 
         for (const pocket of this.pockets) {
@@ -797,7 +832,7 @@ class BilliardGame {
     createCushionDebugLines() {
         // Create visible lines showing where cushions should be
         // Linie pokazują gdzie bila odbija się od bandy
-        const y = TABLE_SURFACE_Y + 0.01;
+        const y = this.getSurfaceY() + 0.01;
         const material = new THREE.LineBasicMaterial({ color: 0xff0000, linewidth: 2 });
 
         // Minimalny offset - linie na samej krawędzi sukna
@@ -909,10 +944,13 @@ class BilliardGame {
             metalness: 0.05,
         });
 
+        // Get surface Y based on current scene
+        const surfaceY = this.currentScene === 'tournament' ? TOURNAMENT_TABLE.HEIGHT : TABLE_SURFACE_Y;
+        
         // Apply table center offset to ball positions
         const ballX = x + TABLE_CENTER_X;
         const ballZ = z + TABLE_CENTER_Z;
-        const ballY = TABLE_SURFACE_Y + BALL_RADIUS + 0.008; // Slightly higher to ensure balls sit on cloth
+        const ballY = surfaceY + BALL_RADIUS + 0.008; // Slightly higher to ensure balls sit on cloth
         const ball = new THREE.Mesh(geometry, material);
         ball.position.set(ballX, ballY, ballZ);
         ball.castShadow = true;
@@ -1295,6 +1333,44 @@ class BilliardGame {
             spinMarker.style.top = '50%';
             this.updateSpinInfo();
         });
+
+        // Setup hardness slider
+        this.setupHardnessControl();
+    }
+
+    setupHardnessControl() {
+        const hardnessSlider = document.getElementById('hardness-slider');
+        const hardnessInfo = document.getElementById('hardness-info');
+
+        if (!hardnessSlider) return;
+
+        const updateHardnessInfo = () => {
+            const value = parseInt(hardnessSlider.value);
+            this.shotHardness = value / 100;
+
+            let description;
+            if (value < 20) {
+                description = `Very Soft (${value}%)`;
+            } else if (value < 40) {
+                description = `Soft (${value}%)`;
+            } else if (value < 60) {
+                description = `Normal (${value}%)`;
+            } else if (value < 80) {
+                description = `Hard (${value}%)`;
+            } else {
+                description = `Very Hard (${value}%)`;
+            }
+
+            if (hardnessInfo) {
+                hardnessInfo.textContent = description;
+            }
+        };
+
+        hardnessSlider.addEventListener('input', updateHardnessInfo);
+        hardnessSlider.addEventListener('change', updateHardnessInfo);
+
+        // Initialize
+        updateHardnessInfo();
     }
 
     updateSpinInfo() {
@@ -1327,6 +1403,229 @@ class BilliardGame {
 
             spinInfo.textContent = parts.join(' + ');
         }
+    }
+
+    /**
+     * Switch between classic and tournament scenes
+     * @param {string} sceneName - 'classic' or 'tournament'
+     */
+    async switchScene(sceneName) {
+        if (this.currentScene === sceneName) return;
+        
+        // Update UI buttons
+        document.querySelectorAll('.scene-btn').forEach(btn => {
+            btn.classList.remove('active');
+            if (btn.dataset.scene === sceneName) {
+                btn.classList.add('active');
+            }
+        });
+        
+        this.currentScene = sceneName;
+        
+        // Remove old table and balls
+        this.clearGameObjects();
+        
+        // Create new table based on scene
+        if (sceneName === 'tournament') {
+            this.createTournamentScene();
+        } else {
+            await this.createClassicScene();
+        }
+        
+        // Recreate balls
+        this.createBalls();
+        
+        // Reset camera position
+        this.resetCameraForScene();
+        
+        // Reset game state
+        this.resetGameState();
+        
+        this.showMessage(`${sceneName === 'tournament' ? '🏆 Tournament' : '🎱 Classic'} Table`);
+    }
+    
+    /**
+     * Clear all game objects (table, balls, etc)
+     */
+    clearGameObjects() {
+        // Remove balls from scene and physics
+        for (let i = this.balls.length - 1; i >= 0; i--) {
+            const ball = this.balls[i];
+            const body = this.ballBodies[i];
+            
+            if (ball) this.scene.remove(ball);
+            if (body) {
+                try {
+                    this.world.removeRigidBody(body);
+                } catch (e) {}
+            }
+        }
+        this.balls = [];
+        this.ballBodies = [];
+        this.ballStates = {};
+        this.cueBall = null;
+        this.cueBallBody = null;
+        
+        // Remove table physics body
+        if (this.tablePhysicsBody) {
+            try {
+                this.world.removeRigidBody(this.tablePhysicsBody);
+            } catch (e) {}
+            this.tablePhysicsBody = null;
+        }
+        
+        // Remove old table
+        if (this.tableModel) {
+            this.scene.remove(this.tableModel);
+            this.tableModel = null;
+        }
+        if (this.tournamentTableData && this.tournamentTableData.group) {
+            this.scene.remove(this.tournamentTableData.group);
+            this.tournamentTableData = null;
+        }
+        
+        // Remove debug circles and lines
+        const toRemove = this.scene.children.filter(c => 
+            c.geometry instanceof THREE.CircleGeometry || 
+            c.type === 'Line' ||
+            (c.geometry instanceof THREE.BufferGeometry && c.material && c.material.type === 'LineBasicMaterial')
+        );
+        toRemove.forEach(c => this.scene.remove(c));
+    }
+    
+    /**
+     * Create classic scene with GLB model
+     */
+    async createClassicScene() {
+        // Recreate table (uses cached model)
+        await this.createTable();
+    }
+    
+    /**
+     * Create tournament scene with procedural table
+     */
+    createTournamentScene() {
+        // Use tournament table center position
+        const centerX = TABLE_CENTER_X;
+        const centerZ = TABLE_CENTER_Z;
+        
+        // Create procedural tournament table
+        this.tournamentTableData = createTournamentTable(this.scene, centerX, centerZ);
+        
+        // Update pockets reference
+        this.pockets = this.tournamentTableData.pockets;
+        this.pocketBaskets = this.tournamentTableData.pocketBaskets;
+        
+        // Create physics colliders for tournament table
+        this.createTournamentTablePhysics(centerX, centerZ);
+        
+        // DEBUG: pocket circles (disabled)
+        // this.createPocketDebugCircles();
+    }
+    
+    /**
+     * Create physics colliders for tournament table
+     */
+    createTournamentTablePhysics(centerX, centerZ) {
+        const T = TOURNAMENT_TABLE;
+        const surfaceY = T.HEIGHT;
+        
+        // Table surface collider
+        const tableBodyDesc = RAPIER.RigidBodyDesc.fixed()
+            .setTranslation(centerX, surfaceY, centerZ);
+        const tableBody = this.world.createRigidBody(tableBodyDesc);
+        this.tablePhysicsBody = tableBody; // Store reference for cleanup
+        const tableColliderDesc = RAPIER.ColliderDesc.cuboid(
+            T.WIDTH / 2,
+            0.01,
+            T.LENGTH / 2
+        ).setRestitution(0.3).setFriction(0.0);
+        this.world.createCollider(tableColliderDesc, tableBody);
+        
+        // Cushion colliders - same as classic table
+        const cushionHeight = 0.15;
+        const cushionThickness = 0.5;
+        
+        const cornerGap = 0.10;
+        const middleGap = 0.12;
+        
+        const longSegmentLength = (T.LENGTH / 2 - middleGap / 2 - cornerGap);
+        
+        const rightCushionX = centerX + T.WIDTH / 2 + cushionThickness;
+        const leftCushionX = centerX - T.WIDTH / 2 - cushionThickness;
+        const frontCushionZ = centerZ + T.LENGTH / 2 + cushionThickness;
+        const backCushionZ = centerZ - T.LENGTH / 2 - cushionThickness;
+        
+        // Right cushions
+        const rightFront = RAPIER.ColliderDesc.cuboid(cushionThickness, cushionHeight, longSegmentLength / 2)
+            .setTranslation(rightCushionX, surfaceY + cushionHeight, centerZ + (T.LENGTH / 4 + cornerGap / 2 + middleGap / 4))
+            .setRestitution(0.0).setFriction(0.0);
+        this.world.createCollider(rightFront, tableBody);
+        
+        const rightBack = RAPIER.ColliderDesc.cuboid(cushionThickness, cushionHeight, longSegmentLength / 2)
+            .setTranslation(rightCushionX, surfaceY + cushionHeight, centerZ - (T.LENGTH / 4 + cornerGap / 2 + middleGap / 4))
+            .setRestitution(0.0).setFriction(0.0);
+        this.world.createCollider(rightBack, tableBody);
+        
+        // Left cushions
+        const leftFront = RAPIER.ColliderDesc.cuboid(cushionThickness, cushionHeight, longSegmentLength / 2)
+            .setTranslation(leftCushionX, surfaceY + cushionHeight, centerZ + (T.LENGTH / 4 + cornerGap / 2 + middleGap / 4))
+            .setRestitution(0.0).setFriction(0.0);
+        this.world.createCollider(leftFront, tableBody);
+        
+        const leftBack = RAPIER.ColliderDesc.cuboid(cushionThickness, cushionHeight, longSegmentLength / 2)
+            .setTranslation(leftCushionX, surfaceY + cushionHeight, centerZ - (T.LENGTH / 4 + cornerGap / 2 + middleGap / 4))
+            .setRestitution(0.0).setFriction(0.0);
+        this.world.createCollider(leftBack, tableBody);
+        
+        // Short cushions
+        const shortCushionLength = (T.WIDTH - cornerGap * 2) / 2;
+        
+        const frontCushion = RAPIER.ColliderDesc.cuboid(shortCushionLength, cushionHeight, cushionThickness)
+            .setTranslation(centerX, surfaceY + cushionHeight, frontCushionZ)
+            .setRestitution(0.0).setFriction(0.0);
+        this.world.createCollider(frontCushion, tableBody);
+        
+        const backCushion = RAPIER.ColliderDesc.cuboid(shortCushionLength, cushionHeight, cushionThickness)
+            .setTranslation(centerX, surfaceY + cushionHeight, backCushionZ)
+            .setRestitution(0.0).setFriction(0.0);
+        this.world.createCollider(backCushion, tableBody);
+    }
+    
+    /**
+     * Reset camera for current scene
+     */
+    resetCameraForScene() {
+        const surfaceY = this.currentScene === 'tournament' ? TOURNAMENT_TABLE.HEIGHT : TABLE_SURFACE_Y;
+        this.camera.position.set(TABLE_CENTER_X, surfaceY + 4.5, TABLE_CENTER_Z + 0.01);
+        this.camera.lookAt(TABLE_CENTER_X, surfaceY, TABLE_CENTER_Z);
+        this.controls.target.set(TABLE_CENTER_X, surfaceY, TABLE_CENTER_Z);
+    }
+    
+    /**
+     * Reset game state without full reload
+     */
+    resetGameState() {
+        this.currentPlayer = 1;
+        this.player1Score = 0;
+        this.player2Score = 0;
+        this.redsRemaining = 15;
+        this.mustPotColor = false;
+        this.targetBall = 'RED';
+        this.foulPoints = 0;
+        this.pocketedBalls = [];
+        this.colorBallsData = {};
+        this.collisionLog = [];
+        this.canShoot = true;
+        this.isAiming = false;
+        this.cueStick.visible = false;
+        this.aimLine.visible = false;
+        
+        // Update HUD
+        document.getElementById('p1-score').textContent = '0';
+        document.getElementById('p2-score').textContent = '0';
+        document.getElementById('reds-remaining').textContent = '15';
+        document.getElementById('pocketed-balls').innerHTML = '';
     }
 
     resetGame() {
@@ -1576,7 +1875,7 @@ class BilliardGame {
         raycaster.setFromCamera(mouse, this.camera);
 
         // Create a plane at table surface height
-        const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -TABLE_SURFACE_Y);
+        const tablePlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -this.getSurfaceY());
         const intersection = new THREE.Vector3();
 
         if (raycaster.ray.intersectPlane(tablePlane, intersection)) {
@@ -1898,11 +2197,6 @@ class BilliardGame {
         const shotDirX = Math.sin(this.aimAngle);
         const shotDirZ = Math.cos(this.aimAngle);
 
-        // Calculate initial velocity from impulse: v = J/m
-        const initialSpeed = power / BALL_MASS;
-        const initialVelX = shotDirX * initialSpeed;
-        const initialVelZ = shotDirZ * initialSpeed;
-
         // Reset any existing velocity and spin first
         this.cueBallBody.setLinvel({ x: 0, y: 0, z: 0 }, true);
         this.cueBallBody.setAngvel({ x: 0, y: 0, z: 0 }, true);
@@ -1917,13 +2211,16 @@ class BilliardGame {
         };
 
         // Apply shot using physics module - this calculates spin correctly
-        applyShot(cueBallState, normalizedPower, this.aimAngle, this.spinX, this.spinY, 8);
+        // NOW includes shot hardness for realistic soft/hard touch control
+        applyShot(cueBallState, normalizedPower, this.aimAngle, this.spinX, this.spinY, 8, this.shotHardness);
 
-        // KLUCZOWE: Używamy prędkości z physics module (która uwzględnia spin)
-        // ale skalujemy do naszego power
-        const speedRatio = initialSpeed / (cueBallState.speed > 0.01 ? cueBallState.speed : 1);
+        // TERAZ używamy prędkości z physics module (która już uwzględnia hardness!)
+        // applyShot() zwraca prędkość z uwzględnieniem speedBoost z hardness
+        const initialSpeed = cueBallState.speed;
+        const initialVelX = cueBallState.velocity.x;
+        const initialVelZ = cueBallState.velocity.z;
 
-        // Ustaw prędkość liniową bezpośrednio (nie przez impulse, żeby mieć kontrolę)
+        // Ustaw prędkość liniową bezpośrednio z physics module
         this.cueBallBody.setLinvel({ x: initialVelX, y: 0, z: initialVelZ }, true);
 
         // Ustaw prędkość kątową z physics module (poprawnie obliczona dla spinu)
@@ -1973,29 +2270,45 @@ class BilliardGame {
         const dt = 1 / 120;
 
         // Predict roll distance using proper slide/roll physics
+        // This now matches the actual physics in updateBallPhysics()
         let simSpeed = initialSpeed;
         let simDistance = 0;
-        let simAngVel = cueBallState.angularSpeed;
+        // Initial angular velocity depends on spin applied
+        // For center ball hit, ω starts near 0 then builds up
+        let simAngVel = Math.abs(cueBallState.angularVelocity.x) > 0.1 ? 
+            Math.sqrt(cueBallState.angularVelocity.x ** 2 + cueBallState.angularVelocity.z ** 2) :
+            0;
         let phase = 'sliding'; // Start in sliding phase after cue strike
 
         let steps = 0;
-        while (simSpeed > PHYSICS_CONFIG.thresholds.velocity_stop && steps < 10000) {
+        const maxSteps = 50000; // Longer simulation for slow balls
+        while (simSpeed > PHYSICS_CONFIG.thresholds.velocity_stop && steps < maxSteps) {
             simDistance += simSpeed * dt;
 
-            // Calculate slip velocity
+            // Calculate slip velocity (difference between ball center speed and surface speed)
             const surfaceSpeed = simAngVel * BALL_RADIUS;
             const slipSpeed = Math.abs(simSpeed - surfaceSpeed);
 
             if (slipSpeed > PHYSICS_CONFIG.thresholds.slip_threshold) {
-                // Sliding phase - higher friction
-                const friction = slidingFriction * g;
-                simSpeed = Math.max(0, simSpeed - friction * dt);
-                // Angular velocity approaches natural roll
+                // Sliding phase - CORRECT physics:
+                // Both linear deceleration AND angular acceleration from friction
+                const frictionAccel = slidingFriction * g;
+                
+                // Limit deceleration to not overshoot
+                const maxDecel = slipSpeed * 0.7;
+                const actualDecel = Math.min(frictionAccel * dt, maxDecel);
+                simSpeed = Math.max(0, simSpeed - actualDecel);
+                
+                // Angular velocity builds up: α = (5/2) * μ * g / R
+                const angularAccel = (5 / 2) * slidingFriction * g / BALL_RADIUS;
                 const targetAngVel = simSpeed / BALL_RADIUS;
-                simAngVel += (targetAngVel - simAngVel) * 0.1;
+                const angDiff = targetAngVel - simAngVel;
+                const angChange = Math.min(angularAccel * dt, Math.abs(angDiff));
+                simAngVel += Math.sign(angDiff) * angChange;
+                
                 phase = 'sliding';
             } else {
-                // Rolling phase - lower friction
+                // Rolling phase - only rolling resistance
                 const friction = rollingResistance * g;
                 simSpeed = Math.max(0, simSpeed - friction * dt);
                 simAngVel = simSpeed / BALL_RADIUS;
@@ -2060,11 +2373,11 @@ class BilliardGame {
                 powerPercent: normalizedPower * 100,
                 powerRaw: this.shotPower,
                 maxPower: this.maxPower,
-                impulse: power,
-                impulseVector: { x: impulse.x, y: impulse.y, z: impulse.z },
                 aimAngle: this.aimAngle,
                 aimAngleDegrees: (this.aimAngle * 180 / Math.PI),
-                direction: { x: shotDirX, z: shotDirZ }
+                direction: { x: Math.sin(this.aimAngle), z: Math.cos(this.aimAngle) },
+                hardness: this.shotHardness,
+                hardnessPercent: Math.round(this.shotHardness * 100)
             },
 
             // Spin/English parameters
@@ -2078,6 +2391,15 @@ class BilliardGame {
                     z: tipContactZ,
                     offsetFromCenter: Math.sqrt(tipContactX * tipContactX + tipContactY * tipContactY)
                 }
+            },
+
+            // Shot touch/hardness - NEW parameter
+            shotTouch: {
+                hardness: this.shotHardness,
+                hardnessPercent: Math.round(this.shotHardness * 100),
+                description: this.shotHardness < 0.3 ? 'Soft' : (this.shotHardness > 0.7 ? 'Hard' : 'Normal'),
+                spinTransfer: cueBallState.shotSpinTransfer || (1.4 - this.shotHardness * 0.8),
+                contactTime: cueBallState.shotContactTime || (0.0003 + (1 - this.shotHardness) * 0.0012)
             },
 
             // Initial physics state (from physics module)
@@ -2151,9 +2473,12 @@ class BilliardGame {
             if (Math.abs(this.spinX) > 0.1) spinParts.push(this.spinX > 0 ? 'right' : 'left');
             spinText = ` [${spinParts.join('+')}]`;
         }
+        
+        // Add hardness indicator
+        const hardnessText = this.shotHardness < 0.3 ? ' soft' : (this.shotHardness > 0.7 ? ' hard' : '');
 
         this.collisionLog.unshift({
-            text: `${time.split(':').slice(1).join(':')} 🎯 Shot #${shotId} ${powerPct}%${spinText} → ${initialSpeed.toFixed(2)}m/s`,
+            text: `${time.split(':').slice(1).join(':')} 🎯 Shot #${shotId} ${powerPct}%${hardnessText}${spinText} → ${initialSpeed.toFixed(2)}m/s`,
             type: 'shot',
             data: shotData
         });
@@ -2175,6 +2500,8 @@ class BilliardGame {
         // Skip during reset
         if (this.resetting) return;
 
+        const surfaceY = this.getSurfaceY();
+        
         // Table bounds for sanity check
         const tableMinX = TABLE_CENTER_X - TABLE_WIDTH / 2 - 0.1;
         const tableMaxX = TABLE_CENTER_X + TABLE_WIDTH / 2 + 0.1;
@@ -2188,8 +2515,8 @@ class BilliardGame {
             if (!ball) continue;
             if (ball.userData.isPocketed) continue; // Already pocketed, waiting for respot
             if (ball.userData.isBeingRemoved) continue; // Being removed
-            if (ball.position.y > TABLE_SURFACE_Y + BALL_RADIUS * 2) continue; // Ball still settling
-            if (ball.position.y < TABLE_SURFACE_Y - 0.1) continue; // Ball fell through - ignore
+            if (ball.position.y > surfaceY + BALL_RADIUS * 2) continue; // Ball still settling
+            if (ball.position.y < surfaceY - 0.1) continue; // Ball fell through - ignore
 
             // Skip balls that are way off table (teleported during respawn)
             if (ball.position.x < tableMinX - 1 || ball.position.x > tableMaxX + 1 ||
@@ -2230,6 +2557,12 @@ class BilliardGame {
         if (ball.userData.isCueBall) {
             // Cue ball pocketed - animate fall then respawn
             this.logPocket('Cue Ball', 0);
+            
+            // Disable shooting during cue ball respawn
+            this.canShoot = false;
+            
+            // Clear cue ball body reference immediately to prevent access errors
+            this.cueBallBody = null;
 
             // Usuń ciało fizyczne
             try {
@@ -2282,6 +2615,9 @@ class BilliardGame {
                 this.animateBallToPocket(ball, basket, () => {
                     ball.visible = false;
                     ball.scale.setScalar(1); // Reset skali
+                    // Clear isBeingRemoved so checkBallsMoving knows animation is done
+                    // Keep isPocketed=true - will be cleared by respotColorBall
+                    ball.userData.isBeingRemoved = false;
                     this.pendingRespots.push({ type: ball.userData.type, index, ball, body });
                 });
             } else {
@@ -2378,11 +2714,13 @@ class BilliardGame {
 
         if (!ball) {
             console.error('respotCueBall: cueBall is null');
+            this.canShoot = true; // Allow shooting anyway to prevent freeze
             return;
         }
 
         if (!this.world) {
             console.error('respotCueBall: world is null');
+            this.canShoot = true; // Allow shooting anyway to prevent freeze
             return;
         }
 
@@ -2402,6 +2740,7 @@ class BilliardGame {
             for (const otherBall of this.balls) {
                 if (otherBall === ball) continue;
                 if (!otherBall || !otherBall.position) continue;
+                if (otherBall.userData && otherBall.userData.isPocketed) continue; // Skip pocketed balls
                 const dx = otherBall.position.x - resetX;
                 const dz = otherBall.position.z - resetZ;
                 if (Math.sqrt(dx * dx + dz * dz) < BALL_RADIUS * 3) {
@@ -2418,7 +2757,7 @@ class BilliardGame {
             if (!overlap) break;
         }
 
-        const resetPos = { x: resetX, y: TABLE_SURFACE_Y + BALL_RADIUS + 0.005, z: resetZ };
+        const resetPos = { x: resetX, y: this.getSurfaceY() + BALL_RADIUS + 0.005, z: resetZ };
 
         try {
             // Utwórz nowe ciało fizyczne dla bili białej
@@ -2442,24 +2781,25 @@ class BilliardGame {
             const cueBallIndex = this.balls.findIndex(b => b && b.userData && b.userData.isCueBall);
             if (cueBallIndex >= 0) {
                 this.ballBodies[cueBallIndex] = newBody;
+                
+                // Reset ball state for cue ball
+                if (this.ballStates && this.ballStates[cueBallIndex]) {
+                    this.ballStates[cueBallIndex].velocity = { x: 0, y: 0, z: 0 };
+                    this.ballStates[cueBallIndex].angularVelocity = { x: 0, y: 0, z: 0 };
+                    this.ballStates[cueBallIndex].position = { x: resetX, y: resetPos.y, z: resetZ };
+                    this.ballStates[cueBallIndex].phase = 'stationary';
+                }
             }
             this.cueBallBody = newBody;
 
             ball.position.set(resetPos.x, resetPos.y, resetPos.z);
             ball.rotation.set(0, 0, 0);
 
-            // Reset ball state for cue ball
-            if (cueBallIndex >= 0 && this.ballStates && this.ballStates[cueBallIndex]) {
-                this.ballStates[cueBallIndex].velocity = { x: 0, y: 0, z: 0 };
-                this.ballStates[cueBallIndex].angularVelocity = { x: 0, y: 0, z: 0 };
-                this.ballStates[cueBallIndex].position = { x: resetX, y: resetPos.y, z: resetZ };
-                this.ballStates[cueBallIndex].phase = 'stationary';
-            }
-
             // Pozwól na strzelanie
             this.canShoot = true;
         } catch (e) {
             console.error('respotCueBall error:', e);
+            this.canShoot = true; // Allow shooting anyway to prevent freeze
         }
     }
 
@@ -2505,13 +2845,14 @@ class BilliardGame {
             }
         }
 
-        const resetPos = { x: spotX, y: TABLE_SURFACE_Y + BALL_RADIUS + 0.005, z: spotZ };
+        const resetPos = { x: spotX, y: this.getSurfaceY() + BALL_RADIUS + 0.005, z: spotZ };
         body.setTranslation(resetPos, true);
         body.setLinvel({ x: 0, y: 0, z: 0 }, true);
         body.setAngvel({ x: 0, y: 0, z: 0 }, true);
         ball.position.set(resetPos.x, resetPos.y, resetPos.z);
         ball.visible = true;
         ball.userData.isPocketed = false; // Clear pocketed flag
+        ball.userData.isBeingRemoved = false; // Clear removal flag
 
         // Reset ball state
         if (this.ballStates[index]) {
@@ -2631,14 +2972,16 @@ class BilliardGame {
         let moving = false;
 
         // Sprawdź czy jest bila w trakcie animacji wpadania
+        // (isBeingRemoved = animacja w toku)
         for (const ball of this.balls) {
-            if (ball && ball.userData && (ball.userData.isPocketed || ball.userData.isBeingRemoved)) {
-                // Bila w trakcie animacji - traktuj jako ruch
+            if (ball && ball.userData && ball.userData.isBeingRemoved) {
+                // Bila w trakcie animacji wpadania - traktuj jako ruch
                 moving = true;
                 break;
             }
         }
 
+        // Sprawdź prędkości fizyczne wszystkich bil
         if (!moving) {
             for (const body of this.ballBodies) {
                 if (!body) continue;
@@ -2657,20 +3000,28 @@ class BilliardGame {
             }
         }
 
-        if (!moving && !this.canShoot) {
+        // Balls stopped AND no animations in progress - safe to process respots
+        if (!moving) {
             // Process pending color ball respots now that all balls have stopped
-            this.processPendingRespots();
-
-            this.canShoot = true;
-            const target = this.mustPotColor ? 'a Color' : 'a Red';
-            document.getElementById('game-status').textContent = `Player ${this.currentPlayer} - Pot ${target}!`;
-            document.getElementById('reds-remaining').textContent = this.redsRemaining;
-
-            // Center camera on suggested target when balls stop
-            if (this.wasMoving) {
-                this.centerCameraOnTarget();
+            if (this.pendingRespots.length > 0) {
+                this.processPendingRespots();
+                // After respotting, wait one more frame to ensure physics is stable
+                // Don't enable shooting yet
+                return true; // Treat as still moving
             }
-        } else if (moving) {
+
+            if (!this.canShoot) {
+                this.canShoot = true;
+                const target = this.mustPotColor ? 'a Color' : 'a Red';
+                document.getElementById('game-status').textContent = `Player ${this.currentPlayer} - Pot ${target}!`;
+                document.getElementById('reds-remaining').textContent = this.redsRemaining;
+
+                // Center camera on suggested target when balls stop
+                if (this.wasMoving) {
+                    this.centerCameraOnTarget();
+                }
+            }
+        } else {
             document.getElementById('game-status').textContent = 'Balls in motion...';
         }
 
@@ -2691,9 +3042,13 @@ class BilliardGame {
         if (!this.cueBallBody) return;
 
         try {
+            // Verify body is still valid before accessing
             const vel = this.cueBallBody.linvel();
+            if (!vel) return; // Body removed
+            
             const angVel = this.cueBallBody.angvel();
             const pos = this.cueBallBody.translation();
+            if (!pos) return; // Body removed
 
             const speed = Math.sqrt(vel.x * vel.x + vel.y * vel.y + vel.z * vel.z);
             const angSpeed = Math.sqrt(angVel.x * angVel.x + angVel.y * angVel.y + angVel.z * angVel.z);
@@ -3289,19 +3644,39 @@ class BilliardGame {
             // Skip balls that are being removed (pocketed)
             if (ball.userData.isPocketed || ball.userData.isBeingRemoved) continue;
 
-            const position = body.translation();
+            let position;
+            try {
+                position = body.translation();
+            } catch (e) {
+                continue; // Body was removed
+            }
             const rotation = body.rotation();
+            
+            // Check if ball is near a pocket - if so, let pocket detection handle it
+            let nearPocket = false;
+            for (const pocket of this.pockets) {
+                const dx = position.x - pocket.x;
+                const dz = position.z - pocket.z;
+                const dist = Math.sqrt(dx * dx + dz * dz);
+                if (dist < pocket.radius + BALL_RADIUS * 2) {
+                    nearPocket = true;
+                    break;
+                }
+            }
 
             // Check if ball flew completely off table (using table center offset)
-            if (Math.abs(position.x - TABLE_CENTER_X) > playHalfWidth + 0.5 ||
+            // But NOT if ball is near a pocket (let pocket detection handle those)
+            const surfaceY = this.getSurfaceY();
+            if (!nearPocket && 
+                (Math.abs(position.x - TABLE_CENTER_X) > playHalfWidth + 0.5 ||
                 Math.abs(position.z - TABLE_CENTER_Z) > playHalfLength + 0.5 ||
-                position.y < TABLE_SURFACE_Y - 0.5 || position.y > TABLE_SURFACE_Y + 1.0) {
+                position.y < surfaceY - 0.5 || position.y > surfaceY + 1.0)) {
 
                 if (ball.userData.isCueBall) {
                     const baulkLineZ = TABLE_CENTER_Z + playHalfLength - 0.737;
                     const resetPos = {
                         x: TABLE_CENTER_X + 0.1,
-                        y: TABLE_SURFACE_Y + BALL_RADIUS + 0.005,
+                        y: surfaceY + BALL_RADIUS + 0.005,
                         z: baulkLineZ - 0.1
                     };
                     body.setTranslation(resetPos, true);
@@ -3317,7 +3692,7 @@ class BilliardGame {
                         const orig = ball.userData.originalPosition;
                         const resetPos = {
                             x: orig.x,
-                            y: TABLE_SURFACE_Y + BALL_RADIUS + 0.005,
+                            y: surfaceY + BALL_RADIUS + 0.005,
                             z: orig.z
                         };
                         body.setTranslation(resetPos, true);
@@ -3384,7 +3759,7 @@ class BilliardGame {
                         const nz = dz / dist;
                         const dvn = dvx * nx + dvz * nz;
 
-                        if (dvn > 0.001) {
+                        if (dvn > 0.01) { // Minimum 1 cm/s approach speed to trigger collision
                             // Initialize or get BallState objects
                             if (!this.ballStates[i]) this.ballStates[i] = new BallState();
                             if (!this.ballStates[j]) this.ballStates[j] = new BallState();
@@ -3539,7 +3914,7 @@ class BilliardGame {
 
                 // Utrzymuj bilę na właściwej wysokości (ONLY if in bounds)
                 // Tylko delikatnie koryguj - nie teleportuj jeśli różnica jest mała
-                const correctY = TABLE_SURFACE_Y + BALL_RADIUS;
+                const correctY = this.getSurfaceY() + BALL_RADIUS;
                 if (pos.y < correctY - 0.001) {
                     // Bila spadła poniżej powierzchni - podnieś ją
                     body.setTranslation({ x: pos.x, y: correctY, z: pos.z }, true);
@@ -3591,7 +3966,7 @@ class BilliardGame {
                     const velBefore = { x: state.velocity.x, z: state.velocity.z };
 
                     // Get current Y for positioning after bounce
-                    const currentY = Math.max(TABLE_SURFACE_Y + BALL_RADIUS, pos.y);
+                    const currentY = Math.max(this.getSurfaceY() + BALL_RADIUS, pos.y);
 
                     // Minimum normal velocity to trigger bounce (prevents glancing shot loops)
                     // At very shallow angles, treat as sliding along cushion instead
@@ -3653,10 +4028,13 @@ class BilliardGame {
                         // Log if significant
                         const ballName = ball.userData.isCueBall ? 'Cue' : ball.userData.name;
                         if (impactSpeed > 0.1) {
+                            // Calculate actual energy loss from velocities
+                            const speedAfterBounce = Math.sqrt(state.velocity.x * state.velocity.x + state.velocity.z * state.velocity.z);
+                            const actualEnergyLoss = ((impactSpeed * impactSpeed - speedAfterBounce * speedAfterBounce) / (impactSpeed * impactSpeed)) * 100;
                             this.logCushionHit(ballName, cushionSide, impactSpeed,
                                 velBefore,
                                 { x: state.velocity.x, z: state.velocity.z },
-                                0, 15);
+                                0, actualEnergyLoss);
                         }
                     }
                 }

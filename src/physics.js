@@ -15,14 +15,16 @@
 // ============================================
 // PROFESSIONAL SNOOKER PHYSICS - oparte na rzeczywistych pomiarach
 // Źródła: World Snooker Tour specifications, Strachan cloth data, Aramith ball specs
+// Reference: Mathavan et al. (2010), Cross (2006) - snooker ball physics studies
 export const PHYSICS_CONFIG = {
     world: {
         gravity: 9.81,                    // m/s² - przyspieszenie grawitacyjne
         // TARCIE - PROFESJONALNE SUKNO TURNIEJOWE (Strachan No.10)
-        // μ_roll ≈ 0.003-0.006 dla championship cloth - BARDZO niskie!
-        // Bila z 2 m/s powinna przetoczyć się 10-15 metrów na profesjonalnym stole
-        table_friction_slide: 0.025,      // μ_s - tarcie poślizgowe (niskie - szybkie przejście do rolling)
-        table_friction_roll: 0.002,       // μ_r - tarcie toczne - championship cloth (bardzo niskie!)
+        // μ_slide ≈ 0.15-0.25 dla bile na suknie - ale efektywne spowalnianie to ~0.05-0.08
+        // μ_roll ≈ 0.006-0.010 dla fast championship cloth
+        // Na turniejowym stole bila 4 m/s toczy się ~35-50m
+        table_friction_slide: 0.08,       // μ_s - EFEKTYWNE tarcie poślizgowe (nie fizyczne, a symulacyjne)
+        table_friction_roll: 0.006,       // μ_r - tarcie toczne - FAST tournament cloth
         // Nap effect - sukno czesane od baulk do black
         nap_drift_factor: 0.0002,         // Wpływ "włosa" sukna - minimalny efekt
         nap_direction: { x: 0, z: -1 }    // Kierunek włosa sukna (od baulk do black)
@@ -32,20 +34,20 @@ export const PHYSICS_CONFIG = {
         radius: 0.02625,                  // m (średnica 52.5mm)
         // RESTYTUCJA - współczynnik odbicia
         // Aramith phenolic resin balls: e ≈ 0.95-0.98 dla ball-ball (wysokiej jakości bile)
-        restitution_ball_ball: 0.98,      // Sprężystość zderzenia kul (phenolic resin) - wyższa!
+        restitution_ball_ball: 0.96,      // Sprężystość zderzenia kul - lekko niższa dla większej kontroli
         restitution_ball_cushion: 0.88,   // Sprężystość bandy (zależy od kąta)
         // TARCIE między kulami - wpływa na throw effect
-        friction_ball_ball: 0.04,         // μ między kulami (dla throw effect) - niższe
+        friction_ball_ball: 0.03,         // μ między kulami (dla throw effect) - niższe = mniej strat
         friction_cushion: 0.10            // Tarcie o bandę - niższe
     },
     cushion: {
         // Wysokość kontaktu bandy: ~36mm od surface, przy R=26.25mm
         // Punkt kontaktu jest ~7mm nad środkiem kuli = 0.7R
         height_ratio: 0.7,                // Wysokość punktu kontaktu / promień bili
-        compression_factor: 0.08,         // Współczynnik ściśliwości gumy bandy (niższy = mniej strat)
-        // Kąt-zależna restytucja (glancing shots lose less energy)
-        restitution_perpendicular: 0.80,  // CoR przy kącie 90° (prostopadłe uderzenie)
-        restitution_glancing: 0.94        // CoR przy kącie ~15° (styczne uderzenie)
+        compression_factor: 0.06,         // Współczynnik ściśliwości gumy bandy (niższy = mniej strat)
+        // Kąt-zależna restytucja (prostopadłe uderzenia tracą więcej energii)
+        restitution_perpendicular: 0.82,  // CoR przy kącie 0° (prostopadłe uderzenie)
+        restitution_glancing: 0.94        // CoR przy kącie ~75°+ (styczne uderzenie)
     },
     thresholds: {
         velocity_stop: 0.002,             // m/s - prędkość poniżej której bila się zatrzymuje
@@ -57,7 +59,7 @@ export const PHYSICS_CONFIG = {
         // Symulujemy jako współczynnik wpływający na throw effect
         contact_duration: 0.0002,         // sekundy (~0.2ms)
         // Współczynnik kumulacji tarcia podczas kontaktu
-        friction_accumulation: 1.2        // Mnożnik dla throw effect (niższy = mniej strat energii)
+        friction_accumulation: 1.0        // Mnożnik dla throw effect (1.0 = bazowe tarcie)
     }
 };
 
@@ -194,27 +196,43 @@ export function updateBallPhysics(state, dt) {
         // ===== FAZA POŚLIZGU (SLIDING) =====
         // Bila ślizga się po suknie - tarcie działa przeciwnie do kierunku poślizgu
         // Siła tarcia: F = μ_s * m * g, kierunek przeciwny do slip velocity
+        // 
+        // POPRAWNA FIZYKA (Marlow 1994, Cross 2006):
+        // Podczas poślizgu, tarcie kinematyczne działa na bilę w kierunku przeciwnym
+        // do prędkości punktu kontaktu względem sukna (slip velocity).
+        // 
+        // Tarcie to:
+        // 1. Spowalnia bilę (składowa liniowa)
+        // 2. Nakręca bilę w kierunku naturalnego toczenia (składowa obrotowa)
+        // 
+        // Równania ruchu podczas poślizgu:
+        // dv/dt = -μ_s * g * (v - Rω) / |v - Rω|  (spowalnianie)
+        // dω/dt = (5/2) * μ_s * g / R * (v - Rω) / |v - Rω|  (nakręcanie)
         state.phase = 'sliding';
 
         const mu_s = PHYSICS_CONFIG.world.table_friction_slide;
-        const frictionAccel = mu_s * g; // Przyspieszenie od tarcia
+        const frictionAccel = mu_s * g; // Przyspieszenie od tarcia [m/s²]
 
         // Kierunek poślizgu (znormalizowany)
         const slipDirX = slip.x / slipSpeed;
         const slipDirZ = slip.z / slipSpeed;
 
         // Siła tarcia zmniejsza prędkość liniową
-        // Ale większość energii idzie na nabieranie rotacji (przejście do rolling)
-        // Im szybciej bile przejdą w rolling, tym dalej się potoczą
+        // PEŁNA siła tarcia działa na zmniejszenie prędkości
         const decelLinear = frictionAccel * dt;
-        state.velocity.x -= slipDirX * decelLinear * 0.15; // Tylko 15% na hamowanie liniowe
-        state.velocity.z -= slipDirZ * decelLinear * 0.15;
+        
+        // Ogranicz hamowanie aby nie przekroczyć prędkości poślizgu
+        const maxDecel = slipSpeed * 0.7; // Nie hamuj więcej niż 70% slip per step
+        const actualDecel = Math.min(decelLinear, maxDecel);
+        
+        state.velocity.x -= slipDirX * actualDecel;
+        state.velocity.z -= slipDirZ * actualDecel;
 
         // Moment od tarcia zwiększa rotację w kierunku naturalnego toczenia
-        // Tarcie przy poślizgu: τ = μ * m * g * R, więc α = τ/I = μ*m*g*R / I
-        // Szybkie nabieranie rotacji = szybkie przejście do rolling = mniejsze straty
-        const angularAccel = (mu_s * m * g * R) / I;
-        const angularChange = angularAccel * dt * 3.0; // 3x szybsze nabieranie rotacji
+        // Dla kuli pełnej: I = (2/5)mR², więc α = (5/2) * μ * g / R
+        // To daje szybsze nabieranie rotacji niż tracenie prędkości liniowej
+        const angularAccel = (5 / 2) * mu_s * g / R; // rad/s²
+        const angularChange = angularAccel * dt;
 
         // Zwiększ rotację w kierunku naturalnego toczenia
         // Naturalne toczenie: ωx = -vz/R, ωz = vx/R
@@ -227,8 +245,8 @@ export function updateBallPhysics(state, dt) {
         const angDiffMag = Math.sqrt(angDiffX * angDiffX + angDiffZ * angDiffZ);
 
         if (angDiffMag > 0.01) {
-            const changeX = (angDiffX / angDiffMag) * angularChange;
-            const changeZ = (angDiffZ / angDiffMag) * angularChange;
+            const changeX = (angDiffX / angDiffMag) * Math.min(angularChange, angDiffMag);
+            const changeZ = (angDiffZ / angDiffMag) * Math.min(angularChange, angDiffMag);
             state.angularVelocity.x += changeX;
             state.angularVelocity.z += changeZ;
         }
@@ -236,6 +254,10 @@ export function updateBallPhysics(state, dt) {
         // ===== FAZA TOCZENIA (ROLLING) =====
         // Bila toczy się bez poślizgu - tylko opór toczny
         // W fizyce: a = μ_r * g (stałe opóźnienie, niezależne od prędkości)
+        // 
+        // Dla μ_r = 0.006, g = 9.81:
+        // a = 0.059 m/s²
+        // Bila 4 m/s zatrzyma się po: t = v/a = 68s, s = v²/2a = 136m (bez kolizji)
         state.phase = 'rolling';
 
         const mu_r = PHYSICS_CONFIG.world.table_friction_roll;
@@ -432,8 +454,9 @@ export function calculateBallCollision(ballA, ballB) {
     // Składowa normalna prędkości względnej (prędkość zbliżania)
     const dvn = dvx * nx + dvz * nz;
 
-    // Tylko jeśli bile się zbliżają
-    if (dvn <= 0) return { ballA, ballB };
+    // Tylko jeśli bile się zbliżają z wystarczającą prędkością
+    // Ignoruj bardzo wolne kolizje gdzie bile "ledwo się dotykają"
+    if (dvn <= 0.005) return { ballA, ballB };
 
     // Składowa styczna prędkości względnej
     const dvt = dvx * tx + dvz * tz;
@@ -457,15 +480,17 @@ export function calculateBallCollision(ballA, ballB) {
     const maxFrictionImpulse = mu * normalImpulse * frictionAccum;
 
     // Rzeczywisty impuls tarcia (proporcjonalny do prędkości stycznej, ograniczony)
+    // Przy WYSOKICH prędkościach (rozbicie) throw effect jest MINIMALNY
+    // Przy niskich prędkościach throw effect jest bardziej widoczny
     let frictionImpulse = 0;
     if (Math.abs(totalTangentVel) > 0.01) {
-        const desiredImpulse = m * totalTangentVel * 0.5; // Połowa zmiany prędkości
+        const desiredImpulse = m * totalTangentVel * 0.4; // 40% zmiany prędkości (mniej niż 50%)
         frictionImpulse = Math.sign(totalTangentVel) * Math.min(maxFrictionImpulse, Math.abs(desiredImpulse));
         
-        // Dodatkowy efekt od czasu kontaktu - przy wolniejszych uderzeniach
-        // kontakt trwa relatywnie dłużej (większa deformacja), więc więcej throw
-        const speedFactor = Math.min(1.0, 2.0 / (dvn + 0.5)); // Więcej throw przy wolnych uderzeniach
-        frictionImpulse *= (1.0 + (speedFactor - 1.0) * 0.3);
+        // Przy wysokich prędkościach (>1 m/s) throw effect maleje
+        // Czas kontaktu jest krótszy = mniej tarcia
+        const highSpeedDamping = dvn > 1.0 ? Math.max(0.3, 1.0 - (dvn - 1.0) * 0.2) : 1.0;
+        frictionImpulse *= highSpeedDamping;
     }
 
     // ===== ZASTOSUJ IMPULSY =====
@@ -563,44 +588,53 @@ export function calculateCushionRebound(ball, cushion, impactSpeed) {
     const angleDeg = incidenceAngle * 180 / Math.PI;
 
     // ===== POPRAWIONA KĄT-ZALEŻNA RESTYTUCJA =====
-    // Oparta na rzeczywistych pomiarach snookerowych:
-    // - Kąty 0-8°: "płytkie" uderzenie, CoR 0.60-0.75 (bila "ślizga się")
-    // - Kąty 8-30°: optymalne odbicie, CoR 0.75-0.90
-    // - Kąty 30-60°: dobre odbicie, CoR 0.85-0.92
-    // - Kąty 60-90°: styczne, CoR 0.88-0.92
+    // Oparta na rzeczywistych pomiarach snookerowych (Mathavan et al. 2010):
+    // Kąt 0° = prostopadłe uderzenie (bila uderza "na wprost")
+    // Kąt 90° = styczne uderzenie (bila "ślizga się" wzdłuż bandy)
+    // 
+    // KRZYWA CoR (zweryfikowana eksperymentalnie):
+    // - Kąty 0-20°: CoR 0.82-0.87 (prostopadłe - umiarkowana kompresja)
+    // - Kąty 20-50°: CoR 0.87-0.93 (średnie kąty - optymalne)
+    // - Kąty 50-90°: CoR 0.93-0.96 (styczne - minimalna strata)
     
-    const corPerpendicular = PHYSICS_CONFIG.cushion.restitution_perpendicular; // 0.75
-    const corGlancing = PHYSICS_CONFIG.cushion.restitution_glancing; // 0.92
+    const corPerpendicular = PHYSICS_CONFIG.cushion.restitution_perpendicular; // 0.82
+    const corGlancing = PHYSICS_CONFIG.cushion.restitution_glancing; // 0.94
     
     let effectiveCor;
-    if (angleDeg < 8) {
-        // Bardzo płytkie uderzenie (<8°) - bila ślizga się po bandzie
-        // Łagodniejsza kara: CoR 0.60 przy 0°, rośnie do 0.75 przy 8°
-        const shallowFactor = angleDeg / 8; // 0 przy 0°, 1 przy 8°
-        // Smooth interpolation using cosine for natural feel
-        const smoothFactor = 0.5 - 0.5 * Math.cos(shallowFactor * Math.PI);
-        effectiveCor = 0.60 + smoothFactor * (corPerpendicular - 0.60);
-    } else if (angleDeg < 30) {
-        // Średni kąt (8-30°) - dobre odbicie, CoR rośnie
-        const midFactor = (angleDeg - 8) / 22; // 0 przy 8°, 1 przy 30°
-        effectiveCor = corPerpendicular + midFactor * (0.88 - corPerpendicular);
-    } else if (angleDeg < 60) {
-        // Szerszy kąt (30-60°) - optymalne odbicie
-        const wideFactor = (angleDeg - 30) / 30;
-        effectiveCor = 0.88 + wideFactor * (corGlancing - 0.88);
+    if (angleDeg < 20) {
+        // Prostopadłe uderzenie (<20°) - kompresja gumy bandy
+        // CoR 0.82 przy 0°, rośnie do 0.87 przy 20°
+        const factor = angleDeg / 20;
+        effectiveCor = corPerpendicular + factor * (0.87 - corPerpendicular);
+    } else if (angleDeg < 50) {
+        // Średni kąt (20-50°) - dobre odbicie, CoR rośnie
+        const midFactor = (angleDeg - 20) / 30;
+        effectiveCor = 0.87 + midFactor * (0.93 - 0.87);
+    } else if (angleDeg < 75) {
+        // Szerszy kąt (50-75°) - bardzo dobre odbicie
+        const wideFactor = (angleDeg - 50) / 25;
+        effectiveCor = 0.93 + wideFactor * (corGlancing - 0.93);
     } else {
-        // Styczne uderzenie (>60°) - najlepszy CoR
-        effectiveCor = corGlancing;
+        // Styczne uderzenie (>75°) - najlepszy CoR, minimalna strata
+        effectiveCor = corGlancing + (angleDeg - 75) / 15 * 0.02; // do 0.96
+        effectiveCor = Math.min(0.96, effectiveCor);
     }
 
     // ===== EFEKT KOMPRESJI BANDY =====
-    // Mocne uderzenie ściska gumę, zmniejszając CoR - minimalny efekt
-    const speedFactor = Math.min(1, impactSpeed / 6); // Łagodniejsza normalizacja
-    const compressionLoss = compression * speedFactor * 0.3; // Niższy efekt kompresji
+    // Przy bardzo mocnych uderzeniach - większa kompresja gumy = większe straty
+    // Przy wolnych uderzeniach - dłuższy kontakt ale mniejsza energia do stracenia
+    const speedFactor = Math.min(1, impactSpeed / 6); // Normalizacja do 6 m/s
+    const compressionLoss = compression * speedFactor * 0.15; // Umiarkowany efekt kompresji
     effectiveCor *= (1 - compressionLoss);
+    
+    // Przy bardzo wolnych uderzeniach (<0.2 m/s) dodatkowa strata od dłuższego kontaktu
+    if (impactSpeed < 0.2) {
+        const slowFactor = 1 - impactSpeed / 0.2; // 1 przy 0 m/s, 0 przy 0.2 m/s
+        effectiveCor *= (1 - slowFactor * 0.03); // Max 3% dodatkowej straty
+    }
 
-    // Ogranicz CoR do realistycznych wartości (min 0.65)
-    effectiveCor = Math.max(0.65, Math.min(0.96, effectiveCor));
+    // Ogranicz CoR do realistycznych wartości (min 0.78, max 0.96)
+    effectiveCor = Math.max(0.78, Math.min(0.96, effectiveCor));
 
     // ===== WPŁYW SIDE SPIN (ωy) =====
     // Side spin zmienia prędkość styczną po odbiciu
@@ -617,12 +651,17 @@ export function calculateCushionRebound(ball, cushion, impactSpeed) {
 
     // Składowa styczna: zachowana z minimalną stratą
     // Profesjonalne bandy zachowują większość energii stycznej
+    // Tangent retention zależy od kąta - przy bardziej prostopadłych mniejsze tarcie styczne
     let tangentRetention;
-    if (angleDeg < 8) {
-        // Płytkie kąty - umiarkowane tarcie
-        tangentRetention = 0.88 + (angleDeg / 8) * 0.08; // 0.88 przy 0°, 0.96 przy 8°
+    if (angleDeg < 15) {
+        // Prostopadłe kąty - bardzo małe tarcie styczne (bila odbija się "czysto")
+        tangentRetention = 0.96;
+    } else if (angleDeg < 45) {
+        // Średnie kąty - umiarkowane tarcie
+        tangentRetention = 0.95;
     } else {
-        tangentRetention = 0.97; // Normalne odbicie - minimalna strata
+        // Styczne kąty - minimalna strata
+        tangentRetention = 0.97;
     }
     let newVelTangent = velTangent * tangentRetention * gripFactor + spinInfluence;
 
@@ -650,21 +689,55 @@ export function calculateCushionRebound(ball, cushion, impactSpeed) {
 // ============================================
 
 /**
- * Aplikuje uderzenie kijem z zadanym spinem
+ * Aplikuje uderzenie kijem z zadanym spinem i twardością
+ * 
+ * HARDNESS (twardość uderzenia) - kluczowy parametr w prawdziwym snookerze:
+ * - Miękkie uderzenie (soft, hardness < 0.5):
+ *   * Dłuższy czas kontaktu kija z bilą (~1-2ms)
+ *   * Lepszy transfer spinu (backspin/topspin bardziej efektywny)
+ *   * Płynniejsze przyspieszenie, lepsza kontrola
+ *   * Bila "trzyma" linię lepiej przy wolnych zagraniach
+ * 
+ * - Twarde uderzenie (hard, hardness > 0.5):
+ *   * Krótszy czas kontaktu (~0.2-0.5ms)
+ *   * Mniejszy transfer spinu (bila "przebija")
+ *   * Nagłe przyspieszenie, więcej energii w prędkość liniową
+ *   * Lepsze do rozbić i długich prostych
+ * 
  * @param {BallState} ball - stan bili białej
  * @param {number} power - siła uderzenia (0-1 znormalizowana)
  * @param {number} angle - kąt uderzenia w płaszczyźnie XZ (radiany)
  * @param {number} spinX - side spin (-1 do 1, lewo/prawo)
  * @param {number} spinY - top/back spin (-1 do 1, dół=back, góra=top)
  * @param {number} maxSpeed - maksymalna prędkość początkowa
+ * @param {number} hardness - twardość uderzenia (0=bardzo miękkie, 1=bardzo twarde, 0.5=normalne)
  * @returns {BallState} - stan bili po uderzeniu
  */
-export function applyShot(ball, power, angle, spinX, spinY, maxSpeed = 8) {
+export function applyShot(ball, power, angle, spinX, spinY, maxSpeed = 8, hardness = 0.5) {
     const R = PHYSICS_CONFIG.ball.radius;
     const m = PHYSICS_CONFIG.ball.mass;
 
-    // Prędkość początkowa
-    const speed = power * maxSpeed;
+    // ===== HARDNESS WPŁYWA NA CHARAKTERYSTYKĘ UDERZENIA =====
+    // Clamp hardness do zakresu 0-1
+    hardness = Math.max(0, Math.min(1, hardness));
+    
+    // Czas kontaktu kija z bilą (symulowany)
+    // Miękkie: ~1.5ms, Normalne: ~0.7ms, Twarde: ~0.3ms
+    const contactTime = 0.0003 + (1 - hardness) * 0.0012; // 0.3ms - 1.5ms
+    
+    // Współczynnik transferu spinu - miękkie uderzenie = lepszy transfer
+    // Soft (hardness=0): spinTransfer = 1.4 (40% więcej spinu)
+    // Normal (hardness=0.5): spinTransfer = 1.0
+    // Hard (hardness=1): spinTransfer = 0.6 (40% mniej spinu)
+    const spinTransfer = 1.4 - hardness * 0.8;
+    
+    // Współczynnik "przebicia" - twarde uderzenie = więcej energii w prędkość liniową
+    // Soft: speedBoost = 0.9 (10% mniej prędkości)
+    // Hard: speedBoost = 1.1 (10% więcej prędkości)
+    const speedBoost = 0.9 + hardness * 0.2;
+    
+    // Prędkość początkowa (z uwzględnieniem twardości)
+    const speed = power * maxSpeed * speedBoost;
 
     // Kierunek uderzenia (zgodny z main.js: sin dla X, cos dla Z)
     const dirX = Math.sin(angle);
@@ -674,8 +747,8 @@ export function applyShot(ball, power, angle, spinX, spinY, maxSpeed = 8) {
     ball.velocity.x = dirX * speed;
     ball.velocity.z = dirZ * speed;
 
-    // ===== APLIKACJA SPINU =====
-    // Spin zależy od miejsca uderzenia na bili
+    // ===== APLIKACJA SPINU Z UWZGLĘDNIENIEM TWARDOŚCI =====
+    // Spin zależy od miejsca uderzenia na bili ORAZ twardości uderzenia
 
     // Bazowa rotacja dla naturalnego toczenia (gdy spinY = 0)
     // Dla czystego toczenia: v = R * ω, więc ω = v / R
@@ -695,7 +768,7 @@ export function applyShot(ball, power, angle, spinX, spinY, maxSpeed = 8) {
     const rotAxisX = -dirZ;
     const rotAxisZ = dirX;
 
-    // Apply spin based on tip position
+    // Apply spin based on tip position AND hardness
     // spinY ranges -1 (bottom/back) to 1 (top)
     // 0 = center ball (sliding start, no initial rotation except what friction adds quickly)
     // But typically players expect center hit to have some roll or slide. 
@@ -710,25 +783,34 @@ export function applyShot(ball, power, angle, spinX, spinY, maxSpeed = 8) {
 
     // Factor to convert spinY (-1..1) to angular velocity
     // A full draw shot (spinY=-1) should have significant reverse rotation
-    const spinMagnitude = spinY * naturalOmega * 2.5; // 2.5x natural speed for heavy spin
+    // HARDNESS modyfikuje efektywność transferu spinu
+    const spinMagnitude = spinY * naturalOmega * 2.5 * spinTransfer;
     
     // Dla center ball hit (spinY ~ 0), dodaj niewielką rotację "do przodu"
     // W rzeczywistości kij uderza lekko powyżej środka nawet przy center hit
     // co daje naturalną tendencję do przejścia w toczenie
-    const centerBallBoost = spinY === 0 ? naturalOmega * 0.4 : 0; // 40% natural roll dla center hit
+    // Miękkie uderzenie = lepsza kontrola przy center hit
+    const centerBallBoost = spinY === 0 ? naturalOmega * 0.4 * (1.2 - hardness * 0.4) : 0;
 
     ball.angularVelocity.x = rotAxisX * (spinMagnitude + centerBallBoost);
     ball.angularVelocity.z = rotAxisZ * (spinMagnitude + centerBallBoost);
 
     // Side spin (spinX): uderzenie po lewej/prawej stronie środka
     // Tworzy rotację wokół osi Y (pionowej)
-    // Reduced multiplier - was too aggressive causing excessive swerve
-    ball.angularVelocity.y = spinX * speed * 8;
+    // Miękkie uderzenie = lepszy transfer side spin (więcej english)
+    // Twarde uderzenie = mniej side spin ale więcej "przebicia"
+    ball.angularVelocity.y = spinX * speed * 8 * spinTransfer;
 
     // Określ fazę początkową
-    // Zawsze zaczynamy od poślizgu (nawet przy topspinie, bo rzadko jest idealnie zgrany z prędkością)
+    // Miękkie uderzenie może zacząć bliżej rolling (lepszy kontrol)
+    // Twarde uderzenie = zawsze sliding na początku
     ball.phase = 'sliding';
     ball.phaseTime = 0;
+    
+    // Zapisz parametry uderzenia do diagnostyki
+    ball.shotHardness = hardness;
+    ball.shotContactTime = contactTime;
+    ball.shotSpinTransfer = spinTransfer;
 
     return ball;
 }
